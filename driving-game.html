@@ -81,44 +81,57 @@
         const sky = new THREE.Mesh(skyGeometry, skyMaterial);
         scene.add(sky);
 
-        // Ground/Road
+        // Road path function - creates a curvy road using sine wave
         const roadWidth = 20;
-        const roadLength = 1000;
-        const roadGeometry = new THREE.PlaneGeometry(roadWidth, roadLength);
-        const roadMaterial = new THREE.MeshLambertMaterial({ color: 0x404040 });
-        const road = new THREE.Mesh(roadGeometry, roadMaterial);
-        road.rotation.x = -Math.PI / 2;
-        road.receiveShadow = true;
-        scene.add(road);
+        const roadCurveFrequency = 0.01; // How often the road curves
+        const roadCurveAmplitude = 30; // How much the road curves
 
-        // Road markings
+        function getRoadCenterX(z) {
+            // Creates a winding road using multiple sine waves for variety
+            return Math.sin(z * roadCurveFrequency) * roadCurveAmplitude +
+                   Math.sin(z * roadCurveFrequency * 0.5) * roadCurveAmplitude * 0.5;
+        }
+
+        // Create road segments that follow the curve
+        const roadSegments = [];
+        const roadSegmentLength = 20;
+        const numSegments = 100;
+
+        for (let i = 0; i < numSegments; i++) {
+            const z = i * roadSegmentLength - 500;
+            const segmentGeometry = new THREE.PlaneGeometry(roadWidth, roadSegmentLength);
+            const segmentMaterial = new THREE.MeshLambertMaterial({ color: 0x404040 });
+            const segment = new THREE.Mesh(segmentGeometry, segmentMaterial);
+            segment.rotation.x = -Math.PI / 2;
+            segment.position.x = getRoadCenterX(z);
+            segment.position.z = z;
+            segment.receiveShadow = true;
+            scene.add(segment);
+            roadSegments.push(segment);
+        }
+
+        // Road markings that follow the curve
         const markings = [];
         const markingGeometry = new THREE.PlaneGeometry(0.5, 4);
         const markingMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFFFF });
 
-        for (let i = -roadLength / 2; i < roadLength / 2; i += 10) {
+        for (let i = 0; i < 200; i++) {
+            const z = i * 10 - 1000;
             const marking = new THREE.Mesh(markingGeometry, markingMaterial);
             marking.rotation.x = -Math.PI / 2;
-            marking.position.set(0, 0.01, i);
+            marking.position.set(getRoadCenterX(z), 0.01, z);
             scene.add(marking);
             markings.push(marking);
         }
 
-        // Grass on sides
-        const grassGeometry = new THREE.PlaneGeometry(200, roadLength);
+        // Grass ground (larger area to cover curved road)
+        const grassGeometry = new THREE.PlaneGeometry(500, 2000);
         const grassMaterial = new THREE.MeshLambertMaterial({ color: 0x228B22 });
-
-        const grassLeft = new THREE.Mesh(grassGeometry, grassMaterial);
-        grassLeft.rotation.x = -Math.PI / 2;
-        grassLeft.position.x = -roadWidth / 2 - 100;
-        grassLeft.receiveShadow = true;
-        scene.add(grassLeft);
-
-        const grassRight = new THREE.Mesh(grassGeometry, grassMaterial);
-        grassRight.rotation.x = -Math.PI / 2;
-        grassRight.position.x = roadWidth / 2 + 100;
-        grassRight.receiveShadow = true;
-        scene.add(grassRight);
+        const grass = new THREE.Mesh(grassGeometry, grassMaterial);
+        grass.rotation.x = -Math.PI / 2;
+        grass.position.y = -0.1;
+        grass.receiveShadow = true;
+        scene.add(grass);
 
         // Trees
         const trees = [];
@@ -146,14 +159,12 @@
             return tree;
         }
 
-        // Generate trees along the road
-        for (let i = -roadLength / 2; i < roadLength / 2; i += 30) {
+        // Generate trees along the curved road
+        for (let i = -1000; i < 1000; i += 30) {
+            const roadCenter = getRoadCenterX(i);
             const randomOffset = Math.random() * 20 + 15;
-            if (Math.random() > 0.5) {
-                trees.push(createTree(-roadWidth / 2 - randomOffset, i));
-            } else {
-                trees.push(createTree(roadWidth / 2 + randomOffset, i));
-            }
+            const side = (Math.random() > 0.5) ? 1 : -1;
+            trees.push(createTree(roadCenter + side * (roadWidth / 2 + randomOffset), i));
         }
 
         // Obstacles (other cars)
@@ -201,11 +212,12 @@
             return obstacle;
         }
 
-        // Generate initial obstacles
-        for (let i = 0; i < 5; i++) {
+        // Generate initial obstacles along curved road
+        for (let i = 0; i < 8; i++) {
+            const z = -50 - Math.random() * 400;
+            const roadCenter = getRoadCenterX(z);
             const lane = (Math.random() > 0.5) ? -4 : 4;
-            const z = -50 - Math.random() * 200;
-            obstacles.push(createObstacle(lane, z));
+            obstacles.push(createObstacle(roadCenter + lane, z));
         }
 
         // Car dashboard/hood visible from driver POV
@@ -250,6 +262,7 @@
         const acceleration = 0.5;
         const braking = 1;
         const turnSpeed = 0.03;
+        const roadFollowStrength = 0.02; // How much the car is pulled toward road center
 
         // Input handling
         const keys = {};
@@ -291,41 +304,89 @@
                 }
             }
 
-            // Update car position
+            // Update car position (FIXED: negative for forward movement)
             const speedFactor = speed / 60;
             carX += Math.sin(-carRotation) * speedFactor;
-            carZ += Math.cos(-carRotation) * speedFactor;
+            carZ -= Math.cos(-carRotation) * speedFactor; // Changed to -= for correct forward direction
 
-            // Keep car on road (with some leeway)
-            carX = Math.max(-roadWidth / 2 + 2, Math.min(roadWidth / 2 - 2, carX));
+            // Get the center of the road at current position
+            const roadCenterX = getRoadCenterX(carZ);
+
+            // Gently guide car toward road center (makes curved driving easier)
+            const offsetFromCenter = carX - roadCenterX;
+            carX -= offsetFromCenter * roadFollowStrength;
+
+            // Keep car on road relative to curved center (with some leeway)
+            const maxOffsetFromCenter = roadWidth / 2 - 2;
+            if (Math.abs(offsetFromCenter) > maxOffsetFromCenter) {
+                carX = roadCenterX + Math.sign(offsetFromCenter) * maxOffsetFromCenter;
+            }
 
             // Update camera position and rotation
             camera.position.x = carX;
             camera.position.z = carZ;
             camera.rotation.y = carRotation;
 
-            // Move road markings to create infinite road effect
-            markings.forEach(marking => {
-                marking.position.z = ((marking.position.z - carZ + roadLength / 2) % roadLength) - roadLength / 2 + carZ;
+            // Update road segments to follow the curve and create infinite road
+            roadSegments.forEach((segment, index) => {
+                const segmentZ = segment.position.z;
+                const relativeZ = segmentZ - carZ;
+
+                // Respawn segments that are behind the car
+                if (relativeZ > 500) {
+                    segment.position.z -= numSegments * roadSegmentLength;
+                } else if (relativeZ < -500) {
+                    segment.position.z += numSegments * roadSegmentLength;
+                }
+
+                // Update segment position to follow curve
+                segment.position.x = getRoadCenterX(segment.position.z);
             });
 
-            // Move trees
+            // Update road markings to follow the curve
+            markings.forEach(marking => {
+                const relativeZ = marking.position.z - carZ;
+
+                // Respawn markings
+                if (relativeZ > 1000) {
+                    marking.position.z -= 2000;
+                } else if (relativeZ < -1000) {
+                    marking.position.z += 2000;
+                }
+
+                // Update marking position to follow curve
+                marking.position.x = getRoadCenterX(marking.position.z);
+            });
+
+            // Update trees
             trees.forEach(tree => {
                 const relativeZ = tree.position.z - carZ;
-                if (relativeZ < -roadLength / 2) {
-                    tree.position.z += roadLength;
+                if (relativeZ > 1000) {
+                    tree.position.z -= 2000;
+                    // Reposition tree along new curve position
+                    const roadCenter = getRoadCenterX(tree.position.z);
+                    const currentOffset = tree.position.x - getRoadCenterX(tree.position.z + 2000);
+                    tree.position.x = roadCenter + currentOffset;
+                } else if (relativeZ < -1000) {
+                    tree.position.z += 2000;
+                    // Reposition tree along new curve position
+                    const roadCenter = getRoadCenterX(tree.position.z);
+                    const currentOffset = tree.position.x - getRoadCenterX(tree.position.z - 2000);
+                    tree.position.x = roadCenter + currentOffset;
                 }
             });
 
-            // Move and respawn obstacles
+            // Move and respawn obstacles along curved road
             obstacles.forEach(obstacle => {
                 const relativeZ = obstacle.position.z - carZ;
 
-                if (relativeZ < -roadLength / 2 || relativeZ > 100) {
-                    // Respawn ahead
+                if (relativeZ > 100 || relativeZ < -500) {
+                    // Respawn ahead on curved road
+                    const newZ = carZ - 100 - Math.random() * 300;
+                    const roadCenter = getRoadCenterX(newZ);
                     const lane = (Math.random() > 0.5) ? -4 : 4;
-                    obstacle.position.x = lane;
-                    obstacle.position.z = carZ - 100 - Math.random() * 100;
+                    obstacle.position.x = roadCenter + lane;
+                    obstacle.position.z = newZ;
                 }
 
                 // Check collision
